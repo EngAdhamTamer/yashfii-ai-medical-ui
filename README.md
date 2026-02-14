@@ -144,4 +144,8 @@ It is a **research / educational demo** only.
 
 **Adham Tamer**\
 AI Engineering Student\
+**Saif Mohamed**\
+AI Engineering Student\
+**Mohamed Korayem**\
+AI Engineering Student\
 Project: *yashfii --- AI Medical Assistant Demo*
