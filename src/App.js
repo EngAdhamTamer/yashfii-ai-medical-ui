@@ -353,6 +353,30 @@ export default function App() {
                 try {
                   inflightRef.current?.abort?.();
                 } catch {}
+
+                // ✅ Auto full analyze when Live stops
+                const full = (liveText || "").trim();
+                if (full.length >= 20) {
+                  (async () => {
+                    try {
+                      setStatus("analyzing");
+                      const res = await fetch("http://localhost:8000/analyze", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ar: full, en: "" })
+                      });
+                      if (!res.ok) throw new Error("Backend error");
+                      const result = await res.json();
+                      setData(result);
+                      setStatus("ready");
+                      showToast("Full analysis updated");
+                    } catch (e) {
+                      console.log(e);
+                      setStatus("idle");
+                      showToast("Full analysis failed");
+                    }
+                  })();
+                }
               }
             }}
           />
@@ -384,7 +408,6 @@ export default function App() {
             )}
           </div>
 
-          {/* زر اختياري لتفريغ الأسئلة لو حبيت */}
           <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
             <button
               className="btn ghost"
