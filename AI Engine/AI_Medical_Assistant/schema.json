@@ -1,0 +1,37 @@
+{
+  "transcript": {
+    "ar": "",
+    "en": ""
+  },
+  "suggested_questions": [],
+  "suggested_diagnoses": [
+    {
+      "name": "",
+      "probability": 0.0,
+      "rationale": ""
+    }
+  ],
+  "soap": {
+    "subjective": "",
+    "objective": "",
+    "assessment": "",
+    "plan": ""
+  },
+  "prescription": {
+    "text": "",
+    "medications": [
+      {
+        "name": "",
+        "dose": "",
+        "route": "",
+        "frequency": "",
+        "duration": "",
+        "notes": ""
+      }
+    ]
+  },
+  "safety_flags": {
+    "red_flags": [],
+    "needs_urgent_referral": false
+  }
+}

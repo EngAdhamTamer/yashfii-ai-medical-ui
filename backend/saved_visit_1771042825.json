@@ -1,0 +1,26 @@
+{
+  "transcript": "Patient: Fever and cough for 3 days. Doctor: Any shortness of breath? Patient: Mild sometimes.",
+  "suggested_questions": [],
+  "differential_diagnosis": [
+    {
+      "name": "Common Cold",
+      "probability": 0.6
+    },
+    {
+      "name": "Influenza",
+      "probability": 0.3
+    },
+    {
+      "name": "Pneumonia",
+      "probability": 0.1
+    }
+  ],
+  "soap_notes": {
+    "subjective": "Patient reported fever and cough for the last three days, with mild shortness of breath that occurs occasionally.",
+    "objective": "No physical findings noted on examination.",
+    "assessment": "Upper respiratory infection or pneumonia. Considering influenza in differential diagnosis due to symptoms duration and severity.",
+    "plan": "Refer to infectious disease specialist if condition does not improve after 48 hours."
+  },
+  "treatment_plan": "Supportive care including hydration, rest, and symptomatic treatment for fever (if present).",
+  "prescription": []
+}
