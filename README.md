@@ -1,70 +1,147 @@
-# Getting Started with Create React App
+# yashfii --- AI Medical Assistant (Demo)
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A full-stack demo for an AI medical assistant built with: **React +
+FastAPI + Ollama + Whisper**.
 
-## Available Scripts
+The project supports: - 🎙️ Live microphone speech-to-text - ⚡ Live
+suggested follow-up questions while the patient/doctor is speaking - 🎧
+Audio upload transcription using Whisper - 🧠 AI analysis (SOAP notes,
+differential diagnosis, treatment plan, etc.) - 💾 Save visit data as
+JSON
 
-In the project directory, you can run:
+------------------------------------------------------------------------
 
-### `npm start`
+## 🧩 Architecture
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+-   **Frontend**: React (localhost:3000)
+    -   Live mic UI
+    -   Displays transcript, suggested questions, diagnoses, SOAP notes
+-   **Backend**: FastAPI (localhost:8000)
+    -   `/analyze` → full AI analysis
+    -   `/analyze-audio` → Whisper transcription + analysis
+    -   `/suggest-questions-live` → fast live suggested questions
+    -   `/save-visit` → save visit JSON
+-   **LLM**: Ollama (local)
+    -   Model used: `qwen2.5:3b`
+-   **Speech-to-Text**: Whisper (via existing Python environment)
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+------------------------------------------------------------------------
 
-### `npm test`
+## ✨ Features
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+-   Live microphone transcription in the browser
+-   Real-time suggested questions (updates while speaking)
+-   Automatic language handling:
+    -   Arabic → questions in Arabic
+    -   English → questions in English
+    -   Mixed → Arabic with medical terms in English
+-   Audio file upload for transcription and analysis
+-   Full AI medical analysis (SOAP, diagnosis, plan, prescription)
+-   Save visit results to JSON files
 
-### `npm run build`
+------------------------------------------------------------------------
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## 📦 Requirements
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+-   **Node.js** (for frontend)
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+-   **Python 3.10+** (for backend)
 
-### `npm run eject`
+-   **Ollama** installed locally\
+    Pull model:
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+    ``` bash
+    ollama pull qwen2.5:3b
+    ```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+-   **Whisper** working in a Python environment
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+------------------------------------------------------------------------
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+## ▶️ Run Backend (FastAPI)
 
-## Learn More
+``` bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Open API docs:
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+    http://localhost:8000/docs
 
-### Code Splitting
+------------------------------------------------------------------------
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+## ▶️ Run Frontend (React)
 
-### Analyzing the Bundle Size
+``` bash
+npm install
+npm start
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+Open in browser:
 
-### Making a Progressive Web App
+    http://localhost:3000
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+------------------------------------------------------------------------
 
-### Advanced Configuration
+## 🔌 Environment Notes
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+The backend uses: - Ollama endpoint: `http://localhost:11434` - Model:
+`qwen2.5:3b` - Whisper Python path can be set using environment
+variable:
 
-### Deployment
+**PowerShell (Windows):**
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+``` powershell
+$env:WHISPER_PY="C:\path\to\your\python.exe"
+```
 
-### `npm run build` fails to minify
+**CMD (Windows):**
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+``` cmd
+set WHISPER_PY=C:\path\to\your\python.exe
+```
+
+(If not set, the backend will raise an error asking for it.)
+
+------------------------------------------------------------------------
+
+## 🧪 Main Endpoints
+
+-   `POST /analyze`\
+    Full analysis from text (SOAP, diagnosis, plan, etc.)
+
+-   `POST /analyze-audio`\
+    Upload audio → Whisper transcription → full analysis
+
+-   `POST /suggest-questions-live`\
+    Lightweight endpoint for **live suggested questions** while speaking
+
+-   `POST /save-visit`\
+    Save visit data to JSON file
+
+------------------------------------------------------------------------
+
+## 🎓 Academic Use
+
+This project is a **demo / educational prototype** showing how to: -
+Integrate speech-to-text with a web UI - Use local LLMs (Ollama) in a
+medical-style assistant - Provide real-time AI assistance during a
+clinical-style conversation - Structure a full-stack AI application
+(React + FastAPI)
+
+------------------------------------------------------------------------
+
+## ⚠️ Disclaimer
+
+This is **not** a medical device and **not** for real clinical use.\
+It is a **research / educational demo** only.
+
+------------------------------------------------------------------------
+
+## 👤 Author
+
+**Adham Tamer**\
+AI Engineering Student\
+Project: *yashfii --- AI Medical Assistant Demo*
