@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useSpeechRecognition({ lang = "ar-EG", continuous = true } = {}) {
   const recognitionRef = useRef(null);
+  const startedRef = useRef(false);
+
   const [isSupported, setIsSupported] = useState(true);
   const [isListening, setIsListening] = useState(false);
   const [interim, setInterim] = useState("");
@@ -22,16 +24,19 @@ export function useSpeechRecognition({ lang = "ar-EG", continuous = true } = {})
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
+      startedRef.current = true;
       setError("");
       setIsListening(true);
     };
 
     rec.onend = () => {
+      startedRef.current = false;
       setIsListening(false);
       setInterim("");
     };
 
     rec.onerror = (e) => {
+      startedRef.current = false;
       setError(e?.error || "speech_error");
       setIsListening(false);
     };
@@ -47,7 +52,10 @@ export function useSpeechRecognition({ lang = "ar-EG", continuous = true } = {})
         else interimChunk += text;
       }
 
-      if (finalChunk) setFinalText((prev) => (prev ? prev + " " : "") + finalChunk.trim());
+      if (finalChunk) {
+        const add = finalChunk.trim();
+        if (add) setFinalText((prev) => (prev ? prev + " " : "") + add);
+      }
       setInterim(interimChunk.trim());
     };
 
@@ -68,6 +76,9 @@ export function useSpeechRecognition({ lang = "ar-EG", continuous = true } = {})
     setError("");
     if (!recognitionRef.current) return;
 
+    // ✅ لو already started متعملش start تاني
+    if (startedRef.current) return;
+
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
@@ -78,6 +89,7 @@ export function useSpeechRecognition({ lang = "ar-EG", continuous = true } = {})
     try {
       recognitionRef.current.start();
     } catch {
+      // بعض المتصفحات بترمي error لو اتنادى start بسرعة
       setError("start_failed");
     }
   }, []);
