@@ -1,0 +1,26 @@
+{
+  "transcript": "أنا بطني وغائني ومسط دار",
+  "suggested_questions": [],
+  "differential_diagnosis": [
+    {
+      "name": "Abdominal Pain",
+      "probability": 0.8
+    },
+    {
+      "name": "Urinary Tract Infection",
+      "probability": 0.1
+    },
+    {
+      "name": "Gastrointestinal Disorder",
+      "probability": 0.1
+    }
+  ],
+  "soap_notes": {
+    "subjective": "The patient complains of abdominal pain, frequent urination, and discomfort in the lower abdomen.",
+    "objective": "Temperature: Normal\nBlood Pressure: 120/80 mmHg\nHeart Rate: 75 bpm\nRespiratory Rate: 16 breaths per minute\nAbdomen: Abdominal tenderness on palpation.\nUrine Test Results: Positive for leukocytes and erythrocytes",
+    "assessment": "The patient may have a urinary tract infection or an abdominal disorder causing these symptoms.",
+    "plan": "Order urine culture test. Schedule follow-up appointment in 1 week."
+  },
+  "treatment_plan": "",
+  "prescription": []
+}

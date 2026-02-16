@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import LiveMicDemo from "./components/LiveMicDemo";
 import "./App.css";
 
-const API = "http://localhost:8000";
+const API = "http://127.0.0.1:8000";
 
 export default function App() {
   const mock = useMemo(
@@ -18,7 +17,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [selectedAudio, setSelectedAudio] = useState(null);
 
-  // Live mic transcript
+  // Live transcript
   const [liveText, setLiveText] = useState("");
   const [isLiveListening, setIsLiveListening] = useState(false);
 
@@ -26,25 +25,26 @@ export default function App() {
   const [suggested, setSuggested] = useState([]);
 
   // Theme
-  const [theme, setTheme] = useState("dark"); // dark | light
+  const [theme, setTheme] = useState("dark");
 
   const fileInputRef = useRef(null);
 
-  // SSE + throttling
-  const sseRef = useRef(null);
+  // Streaming controller
+  const sseAbortRef = useRef(null);
+  const suggestInFlightRef = useRef(false);
+
   const lastTickRef = useRef(0);
-  const lastSentKeyRef = useRef(""); // key يمثل "آخر مدخل مهم"
+  const lastSentKeyRef = useRef("");
   const lastSuggestedAtRef = useRef(0);
+  const suggestedLenRef = useRef(0);
 
   // asked questions tracking
   const askedSetRef = useRef(new Set());
   const lastCapturedQRef = useRef("");
 
-  // listening loop guard
-  const isLiveListeningRef = useRef(false);
   useEffect(() => {
-    isLiveListeningRef.current = isLiveListening;
-  }, [isLiveListening]);
+    suggestedLenRef.current = suggested.length;
+  }, [suggested]);
 
   // Live analysis throttling (diagnosis + soap)
   const analyzeTimerRef = useRef(null);
@@ -52,12 +52,22 @@ export default function App() {
   const lastLiveAnalyzeKeyRef = useRef("");
   const liveAnalyzeInFlightRef = useRef(false);
 
+  // Web Speech
+  const recognitionRef = useRef(null);
+  const finalTextRef = useRef("");
+  const interimRef = useRef("");
+
+  // guard ref
+  const isLiveListeningRef = useRef(false);
+  useEffect(() => {
+    isLiveListeningRef.current = isLiveListening;
+  }, [isLiveListening]);
+
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
   }, []);
 
-  // Apply theme
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
@@ -68,7 +78,7 @@ export default function App() {
   function normalizeArabic(s) {
     return (s || "")
       .toLowerCase()
-      .replace(/[ًٌٍَُِّْـ]/g, "") // تشكيل
+      .replace(/[ًٌٍَُِّْـ]/g, "")
       .replace(/[إأآ]/g, "ا")
       .replace(/ى/g, "ي")
       .replace(/ة/g, "ه")
@@ -80,7 +90,7 @@ export default function App() {
 
   function normalizeQ(s) {
     return normalizeArabic(s)
-      .replace(/[^\p{L}\p{N}\s]/gu, "") // شيل رموز
+      .replace(/[^\p{L}\p{N}\s]/gu, "")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -89,23 +99,20 @@ export default function App() {
     const A = normalizeQ(a);
     const B = normalizeQ(b);
     if (!A || !B) return false;
-
     if (A.includes(B) || B.includes(A)) return true;
 
     const aw = new Set(A.split(" "));
     const bw = new Set(B.split(" "));
     let common = 0;
     for (const w of aw) if (bw.has(w)) common++;
-
     const ratio = common / Math.max(aw.size, bw.size);
-    return ratio >= 0.55; // أهدى شوية عشان العربي
+    return ratio >= 0.55;
   }
 
-  // خُد آخر جملة/جملتين بس عشان السرعة
   function lastSentences(text, maxChars = 220) {
     const t = (text || "").trim();
     if (!t) return "";
-    const tail = t.slice(-1200); // مساحة بسيطة
+    const tail = t.slice(-1200);
     const parts = tail
       .split(/[\n\r]+/g)
       .join(" ")
@@ -114,8 +121,7 @@ export default function App() {
       .filter(Boolean);
 
     const last2 = parts.slice(-2).join(" . ");
-    const clipped = last2.slice(-maxChars);
-    return clipped.trim();
+    return last2.slice(-maxChars).trim();
   }
 
   // -----------------------------
@@ -125,46 +131,33 @@ export default function App() {
     const s0 = (sentence || "").trim();
     const s = normalizeArabic(s0);
 
-    // لو فيها صياغات طبيب/استجواب
     const doctorSignals =
-      /\b(عندك|بتحس|بتحسي|بتحسّ|فيه|هل|امتى|فين|كام|قد ايه|يعني|ممكن|قولي|قلّي|عايز|خدت|بتاخد|بتشرب|بتدخن|ضغط|سكر|حراره|سخونيه|نهجان|وجع صدر)\b/.test(
+      /\b(عندك|بتحس|بتحسي|فيه|هل|امتى|فين|كام|قد ايه|ممكن|قولي|خدت|بتاخد|ضغط|سكر|حراره|سخونيه|نهجان|وجع صدر)\b/.test(
         s
       );
 
-    // مؤشرات مريض (شكوى/ضمير متكلم/أعراض)
     const patientSignals =
-      /\b(انا|عندي|حاسس|حاسه|حسيت|تعبان|تعبانه|موجوع|موجوعه|واجعني|بتوجعني|كحه|بلغم|زوري|حلق|سخونيه|حراره|صداع|دوخه|ترجيع|اسهال|نهجان)\b/.test(
+      /\b(انا|عندي|حاسس|حاسه|تعبان|موجوع|واجعني|بتوجعني|كحه|بلغم|زوري|حلق|سخونيه|حراره|صداع|دوخه|ترجيع|اسهال|نهجان)\b/.test(
         s
       );
 
-    // علامة سؤال + استجواب → غالبًا دكتور
     const looksQuestion = /[؟?]/.test(s0) || /^\s*(هل|امتى|فين|كام|ازاي|ليه|عندك|فيه)\b/.test(s);
 
-    // لو هو سؤال ومفيش مؤشرات "أنا/عندي" يبقى دكتور
     if (looksQuestion && !patientSignals) return "doctor";
-
-    // لو في "أنا/عندي" غالبًا مريض
     if (patientSignals && !doctorSignals) return "patient";
-
-    // لو الاثنين موجودين، رجّح حسب السؤال
     if (looksQuestion) return "doctor";
-
-    // default
     return "patient";
   }
 
   function extractLatestSentence(text) {
     const t = (text || "").trim();
     if (!t) return null;
-
     const tail = t.slice(-500);
     const parts = tail
       .split(/[\n\.!\u061B؛]+/g)
       .map((x) => x.trim())
       .filter(Boolean);
-
-    if (!parts.length) return null;
-    return parts[parts.length - 1];
+    return parts.length ? parts[parts.length - 1] : null;
   }
 
   function extractLatestSpokenQuestionWithSpeaker(text) {
@@ -186,11 +179,10 @@ export default function App() {
     return { speaker, question: cleaned };
   }
 
-  // ✅ حذف السؤال من Suggested فقط لو Doctor
+  // remove asked question only if Doctor
   useEffect(() => {
     const hit = extractLatestSpokenQuestionWithSpeaker(liveText);
     if (!hit) return;
-
     const { speaker, question } = hit;
     if (speaker !== "doctor") return;
 
@@ -202,52 +194,260 @@ export default function App() {
   }, [liveText]);
 
   // -----------------------------
-  // Audio analyze (manual)
+  // Web Speech init
   // -----------------------------
-  const analyzeAudio = useCallback(async () => {
-    if (!selectedAudio) {
-      showToast("Choose an audio file first");
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+
+    const rec = new SR();
+    rec.lang = "ar-EG";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = () => {
+      setIsLiveListening(true);
+      setStatus("idle");
+    };
+
+    rec.onend = () => {
+      setIsLiveListening(false);
+      interimRef.current = "";
+    };
+
+    rec.onerror = () => {
+      setIsLiveListening(false);
+    };
+
+    rec.onresult = (event) => {
+      let interimChunk = "";
+      let finalChunk = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        const txt = res[0]?.transcript ?? "";
+        if (res.isFinal) finalChunk += txt;
+        else interimChunk += txt;
+      }
+
+      if (finalChunk) {
+        finalTextRef.current = (finalTextRef.current ? finalTextRef.current + " " : "") + finalChunk.trim();
+      }
+      interimRef.current = interimChunk.trim();
+
+      const combined = [finalTextRef.current, interimRef.current].filter(Boolean).join(" ").trim();
+      setLiveText(combined);
+    };
+
+    recognitionRef.current = rec;
+
+    return () => {
+      try {
+        rec.onresult = null;
+        rec.onstart = null;
+        rec.onend = null;
+        rec.onerror = null;
+        rec.stop();
+      } catch {}
+    };
+  }, []);
+
+  const startLive = useCallback(async () => {
+    const rec = recognitionRef.current;
+    if (!rec) {
+      showToast("Speech Recognition not supported. Use Chrome/Edge.");
+      return;
+    }
+
+    lastTickRef.current = 0;
+    lastSentKeyRef.current = "";
+    lastCapturedQRef.current = "";
+    askedSetRef.current = new Set();
+    setSuggested([]);
+    setData(null);
+    setStatus("idle");
+    finalTextRef.current = "";
+    interimRef.current = "";
+    setLiveText("");
+
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      showToast("Mic permission denied");
       return;
     }
 
     try {
-      setStatus("analyzing");
+      rec.start();
+    } catch {}
+  }, [showToast]);
 
-      const formData = new FormData();
-      formData.append("file", selectedAudio);
-
-      const res = await fetch(`${API}/analyze-audio`, {
-        method: "POST",
-        body: formData
-      });
-
-      if (!res.ok) throw new Error("Backend error");
-
-      const result = await res.json();
-      setData(result);
-
-      setSuggested((result.suggested_questions || []).slice(0, 3));
-
-      setStatus("ready");
-      showToast("AI analysis complete (audio)");
-    } catch (err) {
-      console.log(err);
-      setStatus("idle");
-      showToast("Backend not responding");
-    }
-  }, [selectedAudio, showToast]);
-
-  const onPickAudio = useCallback(
-    (e) => {
-      const f = e.target.files?.[0] || null;
-      setSelectedAudio(f);
-      if (f) showToast(`Selected: ${f.name}`);
-    },
-    [showToast]
-  );
+  const stopLive = useCallback(() => {
+    try {
+      recognitionRef.current?.stop();
+    } catch {}
+  }, []);
 
   // -----------------------------
-  // ✅ Live Suggested Questions (SSE) — أسرع + أقل payload
+  // Suggested Questions Streaming (POST SSE via fetch)
+  // -----------------------------
+  function stopSuggestionStream() {
+    const ctrl = sseAbortRef.current;
+    if (ctrl) {
+      try {
+        ctrl.abort(); // طبيعي ومش error
+      } catch {}
+      sseAbortRef.current = null;
+    }
+  }
+
+  function isAbortError(err) {
+    const msg = String(err?.message || err || "");
+    return (
+      err?.name === "AbortError" ||
+      msg.includes("aborted") ||
+      msg.includes("AbortError") ||
+      msg.includes("BodyStreamBuffer was aborted")
+    );
+  }
+
+  async function startSuggestionStreamPOST(snippet) {
+    if (suggestInFlightRef.current) return;
+    suggestInFlightRef.current = true;
+
+    stopSuggestionStream();
+
+    const controller = new AbortController();
+    sseAbortRef.current = controller;
+
+    const watchdogMs = 18000;
+    let watchdog = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {}
+    }, watchdogMs);
+
+    try {
+      const res = await fetch(`${API}/suggest-questions-live-stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream"
+        },
+        body: JSON.stringify({ text: snippet, max_questions: 2 }),
+        signal: controller.signal
+      });
+
+      if (!res.ok || !res.body) {
+        clearTimeout(watchdog);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      setStatus("analyzing");
+
+      while (true) {
+        let read;
+        try {
+          read = await reader.read();
+        } catch (e) {
+          if (isAbortError(e)) break;
+          throw e;
+        }
+
+        const { value, done } = read;
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        while (buffer.includes("\n\n")) {
+          const rawEvent = buffer.slice(0, buffer.indexOf("\n\n"));
+          buffer = buffer.slice(buffer.indexOf("\n\n") + 2);
+
+          const lines = rawEvent.split("\n");
+          let eventName = "message";
+          let dataLine = "";
+
+          for (const ln of lines) {
+            if (ln.startsWith("event:")) eventName = ln.slice(6).trim();
+            if (ln.startsWith("data:")) dataLine += ln.slice(5).trim();
+          }
+
+          if (eventName === "ping") {
+            clearTimeout(watchdog);
+            watchdog = setTimeout(() => {
+              try {
+                controller.abort();
+              } catch {}
+            }, watchdogMs);
+            continue;
+          }
+
+          if (eventName === "q") {
+            clearTimeout(watchdog);
+            watchdog = setTimeout(() => {
+              try {
+                controller.abort();
+              } catch {}
+            }, watchdogMs);
+
+            try {
+              const payload = JSON.parse(dataLine || "{}");
+              const q = String(payload.q || "").trim();
+              if (!q) continue;
+
+              setSuggested((prev) => {
+                const asked = askedSetRef.current;
+
+                for (const a of asked) if (isSimilarQuestion(q, a)) return prev;
+                if (prev.some((x) => isSimilarQuestion(x, q))) return prev;
+
+                const next = [...prev, q];
+                while (next.length > 3) next.shift();
+                return next;
+              });
+
+              lastSuggestedAtRef.current = Date.now();
+              setStatus("ready");
+            } catch {}
+          }
+
+          if (eventName === "done") {
+            clearTimeout(watchdog);
+            setStatus("ready");
+            try {
+              controller.abort();
+            } catch {}
+          }
+
+          if (eventName === "error") {
+            clearTimeout(watchdog);
+            setStatus("idle");
+            try {
+              controller.abort();
+            } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      clearTimeout(watchdog);
+      if (!isAbortError(e)) {
+        console.log("suggest stream error", e);
+        setStatus("idle");
+      }
+    } finally {
+      clearTimeout(watchdog);
+      if (sseAbortRef.current === controller) sseAbortRef.current = null;
+      suggestInFlightRef.current = false;
+    }
+  }
+
+  // -----------------------------
+  // Live suggestions tick
   // -----------------------------
   useEffect(() => {
     if (!isLiveListening) return;
@@ -256,111 +456,47 @@ export default function App() {
       const full = (liveText || "").trim();
       if (full.length < 15) return;
 
-      // ✅ ابعت آخر جملة/جملتين بس
       const snippet = lastSentences(full, 240);
       if (snippet.length < 10) return;
 
-      // key يمنع إعادة نفس الطلب (normalize)
       const key = normalizeArabic(snippet);
       if (key === lastSentKeyRef.current) return;
 
-      // throttle: كل 900ms (أسرع شوية)
       const now = Date.now();
       if (now - lastTickRef.current < 900) return;
       lastTickRef.current = now;
 
-      // لو لسه عندك 3 أسئلة وعايز تخفف ضغط، قلل طلبات الـ SSE
-      if (suggested.length >= 3 && now - lastSuggestedAtRef.current < 1800) {
-        // عندك اكتفاء مؤقت
+      if (suggestedLenRef.current >= 3 && now - lastSuggestedAtRef.current < 1800) {
         lastSentKeyRef.current = key;
         return;
       }
 
       lastSentKeyRef.current = key;
-
-      // اقفل أي SSE قديم
-      try {
-        sseRef.current?.close?.();
-      } catch {}
-
-      setStatus("analyzing");
-
-      const url =
-        `${API}/suggest-questions-live-stream?` +
-        `text=${encodeURIComponent(snippet)}&max_questions=2`;
-
-      const es = new EventSource(url);
-      sseRef.current = es;
-
-      es.addEventListener("q", (ev) => {
-        try {
-          const payload = JSON.parse(ev.data || "{}");
-          const q = String(payload.q || "").trim();
-          if (!q) return;
-
-          setSuggested((prev) => {
-            const asked = askedSetRef.current;
-
-            for (const a of asked) {
-              if (isSimilarQuestion(q, a)) return prev;
-            }
-            if (prev.some((x) => isSimilarQuestion(x, q))) return prev;
-
-            // ✅ حافظ على 3 ثابتين: لو زادوا، شيل الأقدم
-            const next = [...prev, q];
-            while (next.length > 3) next.shift();
-            return next;
-          });
-
-          lastSuggestedAtRef.current = Date.now();
-          setStatus("ready");
-        } catch {
-          // ignore
-        }
-      });
-
-      es.addEventListener("done", () => {
-        try {
-          es.close();
-        } catch {}
-      });
-
-      es.onerror = () => {
-        try {
-          es.close();
-        } catch {}
-        setStatus("idle");
-      };
+      startSuggestionStreamPOST(snippet);
     };
 
-    const id = setInterval(tick, 250);
+    const id = setInterval(tick, 900);
 
     return () => {
       clearInterval(id);
-      try {
-        sseRef.current?.close?.();
-      } catch {}
+      stopSuggestionStream();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLiveListening, liveText, suggested.length]);
+  }, [isLiveListening, liveText]);
 
   // -----------------------------
-  // ✅ Live mid-conversation: Diagnosis + SOAP
+  // Live mid analyze (Diagnosis + SOAP + Prescription)
   // -----------------------------
-  async function runLiveMidAnalyze(reason = "live") {
+  async function runLiveMidAnalyze() {
     const full = (liveText || "").trim();
-    if (full.length < 120) return; // بدري قوي
+    if (full.length < 140) return;
 
-    // ابعت جزء أكبر شوية للتشخيص/soap (بس مش كله عشان السرعة)
     const payloadText = full.slice(-1600);
-
-    // key يمنع تكرار نفس التحليل
     const key = normalizeArabic(payloadText).slice(-600);
     if (key === lastLiveAnalyzeKeyRef.current) return;
 
     const now = Date.now();
-    // rate limit: مرة كل 12 ثانية
-    if (now - lastLiveAnalyzeAtRef.current < 12000) return;
+    if (now - lastLiveAnalyzeAtRef.current < 25000) return;
 
     if (liveAnalyzeInFlightRef.current) return;
     liveAnalyzeInFlightRef.current = true;
@@ -378,33 +514,26 @@ export default function App() {
       if (!res.ok) throw new Error("analyze failed");
       const result = await res.json();
 
-      // ✅ أثناء اللايف: نحدّث diagnosis + soap فقط
       setData((prev) => {
         const next = { ...(prev || {}) };
-
         if (result?.differential_diagnosis) next.differential_diagnosis = result.differential_diagnosis;
         if (result?.soap_notes) next.soap_notes = result.soap_notes;
-
-        // ممنوع نعرض treatment_plan أثناء اللايف
-        // هنسيبه يتحدث فقط بعد stop
+        if (result?.prescription) next.prescription = result.prescription;
         return next;
       });
     } catch (e) {
-      // ما نزعّجش المستخدم هنا
       console.log("live analyze error", e);
     } finally {
       liveAnalyzeInFlightRef.current = false;
     }
   }
 
-  // debounce للـ mid-analyze (بعد ما الكلام يثبت شوية)
   useEffect(() => {
     if (!isLiveListening) return;
 
     if (analyzeTimerRef.current) clearTimeout(analyzeTimerRef.current);
-
     analyzeTimerRef.current = setTimeout(() => {
-      runLiveMidAnalyze("debounced");
+      runLiveMidAnalyze();
     }, 1800);
 
     return () => {
@@ -413,9 +542,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveText, isLiveListening]);
 
-  // ✅ عند Stop: اعمل Analyze كامل واعرض treatment plan كآخر خطوة
-  async function runFinalAnalyzeOnStop() {
-    const full = (liveText || "").trim();
+  // Final analyze on Stop
+  async function runFinalAnalyzeOnStop(finalTranscript) {
+    const full = (finalTranscript || "").trim();
     if (full.length < 30) return;
 
     try {
@@ -430,7 +559,6 @@ export default function App() {
       if (!res.ok) throw new Error("final analyze failed");
       const result = await res.json();
 
-      // ✅ بعد stop: حدّث كل حاجة (بما فيها treatment plan)
       setData((prev) => ({
         ...(prev || {}),
         ...result,
@@ -446,71 +574,105 @@ export default function App() {
   }
 
   // -----------------------------
-  // LiveMic callbacks (stable)
+  // Upload Audio analyze
   // -----------------------------
-  const handleTextChange = useCallback((t) => {
-    setLiveText(t);
-  }, []);
+  const onPickAudio = useCallback(
+    (e) => {
+      const f = e.target.files?.[0] || null;
+      setSelectedAudio(f);
+      if (f) showToast(`Selected: ${f.name}`);
+    },
+    [showToast]
+  );
 
-  const handleListeningChange = useCallback((v) => {
-    if (isLiveListeningRef.current === v) return;
+  const analyzeUploadedAudio = useCallback(async () => {
+    if (!selectedAudio) return showToast("Choose an audio file first");
 
-    setIsLiveListening(v);
+    try {
+      setStatus("analyzing");
 
-    if (v) {
-      // start session reset
-      lastTickRef.current = 0;
-      lastSentKeyRef.current = "";
-      lastCapturedQRef.current = "";
-      askedSetRef.current = new Set();
-      setSuggested([]);
-      setData(null);
+      const formData = new FormData();
+      formData.append("file", selectedAudio);
+
+      const res = await fetch(`${API}/analyze-audio`, {
+        method: "POST",
+        body: formData
+      });
+
+      if (!res.ok) throw new Error("Backend error");
+      const result = await res.json();
+
+      setData(result);
+      setSuggested((result.suggested_questions || []).slice(0, 3));
+      setStatus("ready");
+      showToast("AI analysis complete (audio)");
+    } catch (e) {
+      console.log(e);
       setStatus("idle");
-    } else {
-      // stop session
-      try {
-        sseRef.current?.close?.();
-      } catch {}
-      setStatus("idle");
-
-      // ✅ اعمل التحليل النهائي بعد ما يقف
-      runFinalAnalyzeOnStop();
+      showToast("Backend not responding");
     }
-  }, []);
+  }, [selectedAudio, showToast]);
+
+  // -----------------------------
+  // Prescription (meds only)
+  // -----------------------------
+  function formatPrescriptionItem(item) {
+    const s = String(item || "").trim();
+    if (!s) return null;
+
+    let clean = s.split("\n")[0].trim();
+
+    clean = clean
+      .replace(/(follow up|follow-up|consult|visit|as directed|take as directed|treatment plan|plan|advice)/gi, "")
+      .trim();
+
+    if (clean.length > 120) return null;
+
+    return clean || null;
+  }
+
+  const prescriptionList = useMemo(() => {
+    const arr = Array.isArray(data?.prescription) ? data.prescription : [];
+    const cleaned = arr.map(formatPrescriptionItem).filter(Boolean);
+    const out = [];
+    for (const x of cleaned) if (!out.includes(x)) out.push(x);
+    return out;
+  }, [data]);
+
+  const recordBtnText = isLiveListening ? "Stop Recording" : "Record Audio";
 
   return (
     <div className="app">
       <div className="topbar">
         <div className="brand">
-          <div className="logo">y</div>
+          <div className="logo">AI</div>
           <div>
-            <h1 style={{ margin: 0 }}>yashfii</h1>
-            <div style={{ fontSize: 12, opacity: 0.75, marginTop: -2 }}>demo</div>
+            <h1 style={{ margin: 0 }}>AI Doctor Friend</h1>
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          {/* ✅ سيب Analyze Audio فقط */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
             className="btn primary"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={status === "analyzing"}
-            title="Select audio file"
+            onClick={() => {
+              if (isLiveListeningRef.current) {
+                stopLive();
+                stopSuggestionStream();
+                setTimeout(() => runFinalAnalyzeOnStop(finalTextRef.current), 150);
+              } else {
+                startLive();
+              }
+            }}
+            disabled={status === "analyzing" && !isLiveListening}
           >
-            Choose Audio
+            {recordBtnText}
           </button>
 
-          <button className="btn primary" onClick={analyzeAudio} disabled={status === "analyzing"}>
-            Analyze Audio
+          <button className="btn primary" onClick={() => fileInputRef.current?.click()} disabled={status === "analyzing"}>
+            Upload Audio
           </button>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*"
-            onChange={onPickAudio}
-            style={{ display: "none" }}
-          />
+          <input ref={fileInputRef} type="file" accept="audio/*" onChange={onPickAudio} style={{ display: "none" }} />
 
           <button className="btn ghost" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
             {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
@@ -525,14 +687,12 @@ export default function App() {
       </div>
 
       <div className="content grid">
-        {/* Transcript + Live Mic */}
+        {/* Transcript */}
         <div className="card span2">
           <div className="cardHeader">
             <h2 style={{ margin: 0 }}>Transcript</h2>
-            <div className="mutedSmall">{isLiveListening ? "Live (listening)" : "Live (Mic)"}</div>
+            <div className="mutedSmall">{isLiveListening ? "Recording..." : "Mic"}</div>
           </div>
-
-          <LiveMicDemo onTextChange={handleTextChange} onListeningChange={handleListeningChange} />
 
           <pre className="transcript" style={{ marginTop: 12 }}>
             {liveText || data?.transcript || "No transcript yet"}
@@ -540,6 +700,16 @@ export default function App() {
 
           <div className="mutedSmall" style={{ marginTop: 8 }}>
             {selectedAudio ? `Audio: ${selectedAudio.name}` : "No audio selected"}
+          </div>
+
+          <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              className="btn primary"
+              onClick={analyzeUploadedAudio}
+              disabled={status === "analyzing" || !selectedAudio}
+            >
+              Analyze Uploaded Audio
+            </button>
           </div>
         </div>
 
@@ -560,7 +730,7 @@ export default function App() {
             )}
           </div>
           <div className="mutedSmall" style={{ marginTop: 8 }}>
-            {isLiveListening ? "بتتحدث لايف…" : "هتتحدث مع المايك"}
+            {isLiveListening ? "بتتحدث أثناء التسجيل…" : "ابدأ Record عشان تظهر"}
           </div>
         </div>
 
@@ -584,95 +754,80 @@ export default function App() {
               —
             </div>
           )}
-          <div className="mutedSmall" style={{ marginTop: 8 }}>
-            {isLiveListening ? "بيظهر تدريجيًا بعد ما يجمع معلومات كفاية" : "—"}
-          </div>
         </div>
 
         {/* SOAP */}
         <div className="card span2">
           <h2>SOAP Notes</h2>
-
           <div className="soapGrid">
             <div className="soapBox">
               <div className="soapHead">Subjective</div>
               <textarea
+                id="soap-subjective"
+                name="soap-subjective"
                 className="soapInput"
                 value={data?.soap_notes?.subjective || ""}
-                onChange={(e) =>
-                  setData((prev) => ({
-                    ...(prev || {}),
-                    soap_notes: { ...(prev?.soap_notes || {}), subjective: e.target.value }
-                  }))
-                }
-                disabled={!data}
+                readOnly
               />
             </div>
-
             <div className="soapBox">
               <div className="soapHead">Objective</div>
               <textarea
+                id="soap-objective"
+                name="soap-objective"
                 className="soapInput"
                 value={data?.soap_notes?.objective || ""}
-                onChange={(e) =>
-                  setData((prev) => ({
-                    ...(prev || {}),
-                    soap_notes: { ...(prev?.soap_notes || {}), objective: e.target.value }
-                  }))
-                }
-                disabled={!data}
+                readOnly
               />
             </div>
-
             <div className="soapBox">
               <div className="soapHead">Assessment</div>
               <textarea
+                id="soap-assessment"
+                name="soap-assessment"
                 className="soapInput"
                 value={data?.soap_notes?.assessment || ""}
-                onChange={(e) =>
-                  setData((prev) => ({
-                    ...(prev || {}),
-                    soap_notes: { ...(prev?.soap_notes || {}), assessment: e.target.value }
-                  }))
-                }
-                disabled={!data}
+                readOnly
               />
             </div>
-
             <div className="soapBox">
               <div className="soapHead">Plan</div>
               <textarea
+                id="soap-plan"
+                name="soap-plan"
                 className="soapInput"
                 value={data?.soap_notes?.plan || ""}
-                onChange={(e) =>
-                  setData((prev) => ({
-                    ...(prev || {}),
-                    soap_notes: { ...(prev?.soap_notes || {}), plan: e.target.value }
-                  }))
-                }
-                disabled={!data}
+                readOnly
               />
             </div>
           </div>
-
-          <div className="mutedSmall" style={{ marginTop: 8 }}>
-            {isLiveListening ? "بيظهر تدريجيًا أثناء المحادثة" : "—"}
-          </div>
         </div>
 
-        {/* Treatment Plan — يظهر بعد Stop */}
+        {/* Prescription */}
         <div className="card span2">
-          <h2>Treatment Plan</h2>
+          <h2>Prescription</h2>
+
           {isLiveListening ? (
             <div className="itemRow" style={{ opacity: 0.6 }}>
               — (هيظهر بعد ما Stop)
             </div>
+          ) : prescriptionList.length ? (
+            <div className="list">
+              {prescriptionList.map((p, i) => (
+                <div key={i} className="itemRow">
+                  {p}
+                </div>
+              ))}
+            </div>
           ) : (
-            <p style={{ marginTop: 0 }}>{data?.treatment_plan || "—"}</p>
+            <div className="itemRow" style={{ opacity: 0.6 }}>
+              —
+            </div>
           )}
 
           <button
             className="btn primary"
+            style={{ marginTop: 12 }}
             onClick={async () => {
               if (!data) return showToast("No visit data to save");
               try {
