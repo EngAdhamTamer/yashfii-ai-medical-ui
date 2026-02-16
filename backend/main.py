@@ -1,7 +1,7 @@
 import json
 import asyncio
 import re
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Optional
 
 import httpx
 from fastapi import FastAPI, Body, UploadFile, File
@@ -17,7 +17,6 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -29,12 +28,8 @@ app.add_middleware(
 # =======================
 # Ollama
 # =======================
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-
-# ✅ مهم: على 16GB الأفضل موديل 7B instruct
-# MODEL_NAME = "gemma2:9b"
+OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
 MODEL_NAME = "qwen2.5:7b-instruct"
-
 
 # =======================
 # Helpers
@@ -51,7 +46,6 @@ def detect_language(text: str) -> str:
 
 
 FUSHA = ["هل", "لماذا", "متى", "أين", "كيف", "يرجى", "من فضلك", "برجاء", "حضرتك"]
-
 BAD_TOKENS = ["سكوكيشة", "هههه", "😂", "🤔", "؟؟", "??", "ياااه", "مش عارف", "اكيد"]
 
 MEDICAL_HINTS_AR = [
@@ -72,28 +66,22 @@ def is_bad_question(q: str, patient_lang: str) -> bool:
     if not q:
         return True
 
-    # لازم سؤال
     if not (q.endswith("؟") or q.endswith("?")):
         return True
 
-    # طول
     if len(q) > 90 or len(q.split()) > 16:
         return True
 
-    # ممنوع فصحى لو عربي
     if patient_lang in ("ar", "mixed"):
         if any(w in q for w in FUSHA):
             return True
 
-    # تكرار غريب
     if re.search(r"(.)\1\1", q):
         return True
 
-    # nonsense
     if any(t in q for t in BAD_TOKENS):
         return True
 
-    # لازم يبقى “طبي” لو عربي/ميكس
     if patient_lang in ("ar", "mixed"):
         if not looks_medical_ar(q):
             return True
@@ -102,14 +90,13 @@ def is_bad_question(q: str, patient_lang: str) -> bool:
 
 
 def extract_questions_from_text(text: str) -> List[str]:
-    """
-    يلقط أي جملة تنتهي بـ ؟ أو ? من النص
-    """
     t = (text or "").strip()
     if not t:
         return []
 
-    candidates = []
+    candidates: List[str] = []
+
+    # lines
     for line in t.splitlines():
         line = line.strip()
         if not line:
@@ -123,7 +110,7 @@ def extract_questions_from_text(text: str) -> List[str]:
     if not candidates:
         candidates = [x.strip() for x in re.findall(r"([^\n\r]{6,140}[؟?])", t) if x.strip()]
 
-    out = []
+    out: List[str] = []
     seen = set()
     for q in candidates:
         q2 = re.sub(r"\s+", " ", q).strip()
@@ -133,35 +120,9 @@ def extract_questions_from_text(text: str) -> List[str]:
     return out
 
 
-async def ollama_generate(prompt: str, timeout_s: int = 60) -> str:
-    """
-    ✅ أضفنا options لتقليل الهلاوس + منع الإطالة
-    """
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
-        r = await client.post(
-            OLLAMA_URL,
-            json={
-                "model": MODEL_NAME,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.2,
-                    "top_p": 0.9,
-                    "num_predict": 220,
-                },
-            },
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("response", "") or ""
-
-
 def fallback_questions(text: str, patient_lang: str, max_questions: int) -> List[str]:
-    """
-    ✅ بنك أسئلة دكتور لو الموديل هبد
-    """
     t = text or ""
-    bank_ar = []
+    bank_ar: List[str] = []
 
     if "كحة" in t or "كح" in t:
         bank_ar.append("الكحة ناشفة ولا ببلغم؟")
@@ -190,15 +151,12 @@ def fallback_questions(text: str, patient_lang: str, max_questions: int) -> List
         "Any chronic diseases?",
     ]
 
-    if patient_lang == "en":
-        out = bank_en
-    else:
-        out = bank_ar
+    out = bank_en if patient_lang == "en" else bank_ar
 
-    # unique + slice
-    uniq = []
+    uniq: List[str] = []
     for q in out:
-        q = q if (q.endswith("؟") or q.endswith("?")) else (q + "؟")
+        if not (q.endswith("؟") or q.endswith("?")):
+            q = q + ("?" if patient_lang == "en" else "؟")
         if q not in uniq:
             uniq.append(q)
         if len(uniq) >= max_questions:
@@ -206,13 +164,108 @@ def fallback_questions(text: str, patient_lang: str, max_questions: int) -> List
     return uniq
 
 
+def _extract_json_object(raw: str) -> Optional[dict]:
+    """
+    يحاول يطلع JSON object حتى لو الموديل رجّع نص حوالينه
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+
+    # direct
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except:
+        pass
+
+    # find first {...} block
+    m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    if not m:
+        return None
+    chunk = m.group(0).strip()
+    try:
+        obj = json.loads(chunk)
+        if isinstance(obj, dict):
+            return obj
+    except:
+        return None
+    return None
+
+
+async def ollama_generate_full(prompt: str, timeout_s: int = 120, force_json: bool = False) -> str:
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        payload = {
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "num_predict": 600,
+            },
+        }
+        if force_json:
+            payload["format"] = "json"
+
+        r = await client.post(OLLAMA_GENERATE_URL, json=payload)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("response", "") or ""
+
+
+async def ollama_stream(prompt: str, timeout_s: int = 120) -> AsyncGenerator[str, None]:
+    """
+    Streaming chunks from Ollama (each line is JSON).
+    Yields token chunks as strings.
+    """
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        async with client.stream(
+            "POST",
+            OLLAMA_GENERATE_URL,
+            json={
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": True,
+                "options": {
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    "num_predict": 260,
+                },
+            },
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except:
+                    continue
+                chunk = obj.get("response", "") or ""
+                if chunk:
+                    yield chunk
+                if obj.get("done") is True:
+                    break
+
+
+def sse(event: str, data_obj) -> str:
+    if isinstance(data_obj, str):
+        data = data_obj
+    else:
+        data = json.dumps(data_obj, ensure_ascii=False)
+    return f"event: {event}\ndata: {data}\n\n"
+
+
 # =======================
-# Suggested Questions - Stable SSE
+# Suggested Questions - TRUE Live SSE
 # =======================
 @app.post("/suggest-questions-live-stream")
 async def suggest_questions_live_stream(payload: dict = Body(...)):
     text = str(payload.get("text", "") or "")
     max_questions = int(payload.get("max_questions", 2) or 2)
+    max_questions = max(1, min(5, max_questions))
 
     patient_lang = detect_language(text)
 
@@ -226,7 +279,6 @@ async def suggest_questions_live_stream(payload: dict = Body(...)):
         lang_instr = "Simple medical English."
         example = "Example: Any shortness of breath?"
 
-    # ✅ prompt أقوى + يمنع الهبد + يفضل الاختيار من بنك
     prompt = f"""
 انت مساعد دكتور.
 
@@ -235,7 +287,7 @@ async def suggest_questions_live_stream(payload: dict = Body(...)):
 قواعد صارمة:
 - {lang_instr}
 - سؤال واحد في السطر.
-- كل سؤال ينتهي بـ ؟
+- كل سؤال ينتهي بـ ؟ أو ?
 - ممنوع أي شرح/مقدمات/نصايح/ضحك/إيموجي.
 - لو مش متأكد، اختار من بنك الأسئلة فقط.
 
@@ -258,68 +310,94 @@ async def suggest_questions_live_stream(payload: dict = Body(...)):
 """.strip()
 
     async def event_gen() -> AsyncGenerator[str, None]:
-        yield "event: ping\ndata: {\"stage\":\"connected\"}\n\n"
+        # important headers for proxies/buffers:
+        # (FastAPI/uvicorn usually ok, but keep pings frequent)
+        yield sse("ping", {"stage": "connected"})
 
-        async def ping_task(queue: asyncio.Queue):
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def pinger():
             try:
                 while True:
                     await asyncio.sleep(2)
-                    await queue.put(("ping", "{}"))
+                    await queue.put(("ping", {}))
             except asyncio.CancelledError:
                 return
 
-        q: asyncio.Queue = asyncio.Queue()
-        pinger = asyncio.create_task(ping_task(q))
+        async def producer():
+            """
+            Streams from Ollama and emits questions as soon as they are detected.
+            """
+            emitted: List[str] = []
+            acc = ""
+
+            try:
+                async for chunk in ollama_stream(prompt, timeout_s=120):
+                    acc += chunk
+
+                    # detect questions progressively
+                    qs = extract_questions_from_text(acc)
+                    for q in qs:
+                        if len(emitted) >= max_questions:
+                            break
+                        qq = q.strip()
+                        if not (qq.endswith("؟") or qq.endswith("?")):
+                            continue
+                        if is_bad_question(qq, patient_lang):
+                            continue
+                        if qq in emitted:
+                            continue
+
+                        emitted.append(qq)
+                        await queue.put(("q", {"q": qq, "language": patient_lang}))
+
+                    if len(emitted) >= max_questions:
+                        break
+
+                if len(emitted) < max_questions:
+                    for qq in fallback_questions(text, patient_lang, max_questions):
+                        if len(emitted) >= max_questions:
+                            break
+                        if qq not in emitted:
+                            emitted.append(qq)
+                            await queue.put(("q", {"q": qq, "language": patient_lang}))
+
+                await queue.put(("done", {}))
+            except Exception as e:
+                await queue.put(("error", {"error": str(e)}))
+
+        ping_task = asyncio.create_task(pinger())
+        prod_task = asyncio.create_task(producer())
 
         try:
-            try:
-                raw = await ollama_generate(prompt, timeout_s=60)
-            except Exception as e:
-                await q.put(("error", json.dumps({"error": str(e)})))
-                raw = ""
-
-            questions = extract_questions_from_text(raw)
-
-            clean = []
-            for item in questions:
-                qq = item.strip()
-                if not (qq.endswith("؟") or qq.endswith("?")):
-                    qq = qq.rstrip() + "؟"
-
-                if is_bad_question(qq, patient_lang):
-                    continue
-
-                clean.append(qq)
-                if len(clean) >= max_questions:
-                    break
-
-            # ✅ fallback قوي لو الموديل طلع كلام غريب أو مفيش أسئلة
-            if len(clean) < max_questions:
-                clean = fallback_questions(text, patient_lang, max_questions)
-
-            for qq in clean[:max_questions]:
-                await q.put(("q", json.dumps({"q": qq, "language": patient_lang}, ensure_ascii=False)))
-
-            await q.put(("done", "{}"))
-
             while True:
-                ev, data = await q.get()
-                yield f"event: {ev}\ndata: {data}\n\n"
+                ev, data = await queue.get()
+                yield sse(ev, data)
                 if ev in ("done", "error"):
                     break
-
         finally:
-            pinger.cancel()
+            ping_task.cancel()
+            prod_task.cancel()
             try:
-                await pinger
+                await ping_task
+            except:
+                pass
+            try:
+                await prod_task
             except:
                 pass
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        # some reverse proxies buffer without this:
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
 
 
 # =======================
-# Analyze
+# Analyze (Diagnosis + SOAP + Prescription)
 # =======================
 @app.post("/analyze")
 async def analyze(payload: dict = Body(...)):
@@ -340,28 +418,30 @@ async def analyze(payload: dict = Body(...)):
         prompt = f"""
 You are a medical documentation assistant.
 
-Return STRICT JSON with:
-- differential_diagnosis: array of objects {{ "name": "...", "probability": 0.0-1.0 }}
-- soap_notes: {{ "subjective": "...", "objective": "...", "assessment": "...", "plan": "..." }}
+Return STRICT JSON object with EXACT keys:
+- differential_diagnosis: array of objects {{ "name": string, "probability": number 0..1 }}
+- soap_notes: {{ "subjective": string, "objective": string, "assessment": string, "plan": string }}
 - prescription: array of strings in format: "Drug - Dose - Frequency"
 
 Rules:
-- prescription: ONLY medications (no treatment plan, no advice).
-- JSON only (no markdown).
+- JSON ONLY. No markdown. No extra keys.
+- prescription: ONLY medications (no advice, no treatment plan).
 
 Conversation:
 {text}
 """.strip()
 
-        raw = await ollama_generate(prompt, timeout_s=180)
+        # try forced json first
+        raw = await ollama_generate_full(prompt, timeout_s=180, force_json=True)
+        obj = _extract_json_object(raw)
 
-        try:
-            obj = json.loads(raw)
-        except:
-            obj = {}
+        # fallback without force_json (some models might ignore)
+        if not obj:
+            raw2 = await ollama_generate_full(prompt, timeout_s=180, force_json=False)
+            obj = _extract_json_object(raw2) or {}
 
         dd = obj.get("differential_diagnosis") or []
-        soap = obj.get("soap_notes") or obj.get("soap") or {}
+        soap = obj.get("soap_notes") or {}
         rx = obj.get("prescription") or []
 
         norm_dd = []

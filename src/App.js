@@ -46,7 +46,7 @@ export default function App() {
     suggestedLenRef.current = suggested.length;
   }, [suggested]);
 
-  // Live analysis throttling (diagnosis + soap)
+  // Live analysis throttling (diagnosis + soap + rx)
   const analyzeTimerRef = useRef(null);
   const lastLiveAnalyzeAtRef = useRef(0);
   const lastLiveAnalyzeKeyRef = useRef("");
@@ -296,7 +296,7 @@ export default function App() {
     const ctrl = sseAbortRef.current;
     if (ctrl) {
       try {
-        ctrl.abort(); // طبيعي ومش error
+        ctrl.abort();
       } catch {}
       sseAbortRef.current = null;
     }
@@ -304,12 +304,7 @@ export default function App() {
 
   function isAbortError(err) {
     const msg = String(err?.message || err || "");
-    return (
-      err?.name === "AbortError" ||
-      msg.includes("aborted") ||
-      msg.includes("AbortError") ||
-      msg.includes("BodyStreamBuffer was aborted")
-    );
+    return err?.name === "AbortError" || msg.includes("aborted") || msg.includes("AbortError");
   }
 
   async function startSuggestionStreamPOST(snippet) {
@@ -321,7 +316,8 @@ export default function App() {
     const controller = new AbortController();
     sseAbortRef.current = controller;
 
-    const watchdogMs = 18000;
+    // with backend pings, we can safely keep it higher
+    const watchdogMs = 30000;
     let watchdog = setTimeout(() => {
       try {
         controller.abort();
@@ -377,24 +373,17 @@ export default function App() {
             if (ln.startsWith("data:")) dataLine += ln.slice(5).trim();
           }
 
-          if (eventName === "ping") {
-            clearTimeout(watchdog);
-            watchdog = setTimeout(() => {
-              try {
-                controller.abort();
-              } catch {}
-            }, watchdogMs);
-            continue;
-          }
+          // reset watchdog on any event (ping or q)
+          clearTimeout(watchdog);
+          watchdog = setTimeout(() => {
+            try {
+              controller.abort();
+            } catch {}
+          }, watchdogMs);
+
+          if (eventName === "ping") continue;
 
           if (eventName === "q") {
-            clearTimeout(watchdog);
-            watchdog = setTimeout(() => {
-              try {
-                controller.abort();
-              } catch {}
-            }, watchdogMs);
-
             try {
               const payload = JSON.parse(dataLine || "{}");
               const q = String(payload.q || "").trim();
@@ -417,7 +406,6 @@ export default function App() {
           }
 
           if (eventName === "done") {
-            clearTimeout(watchdog);
             setStatus("ready");
             try {
               controller.abort();
@@ -425,7 +413,6 @@ export default function App() {
           }
 
           if (eventName === "error") {
-            clearTimeout(watchdog);
             setStatus("idle");
             try {
               controller.abort();
@@ -466,6 +453,7 @@ export default function App() {
       if (now - lastTickRef.current < 900) return;
       lastTickRef.current = now;
 
+      // prevent spam if we already have 3 suggestions very recently
       if (suggestedLenRef.current >= 3 && now - lastSuggestedAtRef.current < 1800) {
         lastSentKeyRef.current = key;
         return;
@@ -489,14 +477,18 @@ export default function App() {
   // -----------------------------
   async function runLiveMidAnalyze() {
     const full = (liveText || "").trim();
-    if (full.length < 140) return;
 
-    const payloadText = full.slice(-1600);
-    const key = normalizeArabic(payloadText).slice(-600);
+    // أسرع: من 140 -> 80
+    if (full.length < 80) return;
+
+    const payloadText = full.slice(-1800);
+    const key = normalizeArabic(payloadText).slice(-700);
     if (key === lastLiveAnalyzeKeyRef.current) return;
 
     const now = Date.now();
-    if (now - lastLiveAnalyzeAtRef.current < 25000) return;
+
+    // أسرع: من 25s -> 10s
+    if (now - lastLiveAnalyzeAtRef.current < 10000) return;
 
     if (liveAnalyzeInFlightRef.current) return;
     liveAnalyzeInFlightRef.current = true;
@@ -519,8 +511,12 @@ export default function App() {
         if (result?.differential_diagnosis) next.differential_diagnosis = result.differential_diagnosis;
         if (result?.soap_notes) next.soap_notes = result.soap_notes;
         if (result?.prescription) next.prescription = result.prescription;
+        // keep transcript preview
+        next.transcript = full;
         return next;
       });
+
+      setStatus("ready");
     } catch (e) {
       console.log("live analyze error", e);
     } finally {
@@ -534,7 +530,7 @@ export default function App() {
     if (analyzeTimerRef.current) clearTimeout(analyzeTimerRef.current);
     analyzeTimerRef.current = setTimeout(() => {
       runLiveMidAnalyze();
-    }, 1800);
+    }, 1200);
 
     return () => {
       if (analyzeTimerRef.current) clearTimeout(analyzeTimerRef.current);
@@ -621,13 +617,11 @@ export default function App() {
     if (!s) return null;
 
     let clean = s.split("\n")[0].trim();
-
     clean = clean
       .replace(/(follow up|follow-up|consult|visit|as directed|take as directed|treatment plan|plan|advice)/gi, "")
       .trim();
 
-    if (clean.length > 120) return null;
-
+    if (clean.length > 140) return null;
     return clean || null;
   }
 
@@ -762,43 +756,19 @@ export default function App() {
           <div className="soapGrid">
             <div className="soapBox">
               <div className="soapHead">Subjective</div>
-              <textarea
-                id="soap-subjective"
-                name="soap-subjective"
-                className="soapInput"
-                value={data?.soap_notes?.subjective || ""}
-                readOnly
-              />
+              <textarea className="soapInput" value={data?.soap_notes?.subjective || ""} readOnly />
             </div>
             <div className="soapBox">
               <div className="soapHead">Objective</div>
-              <textarea
-                id="soap-objective"
-                name="soap-objective"
-                className="soapInput"
-                value={data?.soap_notes?.objective || ""}
-                readOnly
-              />
+              <textarea className="soapInput" value={data?.soap_notes?.objective || ""} readOnly />
             </div>
             <div className="soapBox">
               <div className="soapHead">Assessment</div>
-              <textarea
-                id="soap-assessment"
-                name="soap-assessment"
-                className="soapInput"
-                value={data?.soap_notes?.assessment || ""}
-                readOnly
-              />
+              <textarea className="soapInput" value={data?.soap_notes?.assessment || ""} readOnly />
             </div>
             <div className="soapBox">
               <div className="soapHead">Plan</div>
-              <textarea
-                id="soap-plan"
-                name="soap-plan"
-                className="soapInput"
-                value={data?.soap_notes?.plan || ""}
-                readOnly
-              />
+              <textarea className="soapInput" value={data?.soap_notes?.plan || ""} readOnly />
             </div>
           </div>
         </div>
@@ -807,11 +777,7 @@ export default function App() {
         <div className="card span2">
           <h2>Prescription</h2>
 
-          {isLiveListening ? (
-            <div className="itemRow" style={{ opacity: 0.6 }}>
-              — (هيظهر بعد ما Stop)
-            </div>
-          ) : prescriptionList.length ? (
+          {prescriptionList.length ? (
             <div className="list">
               {prescriptionList.map((p, i) => (
                 <div key={i} className="itemRow">
