@@ -1,115 +1,87 @@
-# How to Run the Project (yashfii AI Medical UI)
+# Run Guide (React + FastAPI + Ollama)
 
-This file explains step-by-step how to run the full project after cloning or reopening it.
+## Requirements
+- Node.js (v18+ recommended)
+- Python 3.10+
+- Ollama installed and running
+- Model installed: `qwen2.5:7b-instruct`
 
 ---
 
-## 1) Start Ollama (LLM)
+## 1) Start Ollama
+### Check Ollama is running
+```bash
+ollama --version
+```
 
-Make sure Ollama is installed and running.
-
-Check available models:
+### Check model exists
 ```bash
 ollama list
 ```
 
-If the model is missing, pull it:
+If you don't have the model:
 ```bash
-ollama pull qwen2.5:3b
-```
-
-Ollama runs on:
-```
-http://localhost:11434
+ollama pull qwen2.5:7b-instruct
 ```
 
 ---
 
-## 2) Run Backend (FastAPI) — Port 8000
+## 2) Run Backend (FastAPI)
 
-Open a new PowerShell window:
-
-```powershell
-cd D:\frontend\ai-medical-ui\backend
-uvicorn main:app --reload --port 8000
+### Create venv (recommended)
+Windows:
+```bash
+python -m venv .venv
+.venv\Scripts\activate
 ```
 
-Test backend:
-```
-http://localhost:8000/docs
+Mac/Linux:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-### Important Note
-We installed `python-multipart` for the correct Python version (Python 3.13) because `/analyze-audio` needs it.
-
-If you get an error about multipart again, run:
-```powershell
-C:\Users\Tamoora\AppData\Local\Programs\Python\Python313\python.exe -m pip install python-multipart
+### Install dependencies
+```bash
+pip install fastapi uvicorn httpx
 ```
+
+> If you already have a `requirements.txt`, use:
+```bash
+pip install -r requirements.txt
+```
+
+### Run server
+```bash
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Backend:
+- http://127.0.0.1:8000
+- Docs: http://127.0.0.1:8000/docs
 
 ---
 
-## 3) Run Frontend (React) — Port 3000
+## 3) Run Frontend (React)
 
-Open another PowerShell window:
-
-```powershell
-cd D:\frontend\ai-medical-ui
+```bash
 npm install
 npm start
 ```
 
-Open in browser:
-```
-http://localhost:3000
-```
+Frontend:
+- http://localhost:3000
 
 ---
 
-## 4) Whisper (For Audio Upload)
-
-Audio upload uses Whisper via a separate Python environment.
-
-If needed, set the environment variable before running backend:
-
-```powershell
-$env:WHISPER_PY="C:\AI_Medical_Assistant\venv\Scripts\python.exe"
-```
-
-Then run backend again:
-```powershell
-uvicorn main:app --reload --port 8000
-```
+## 4) Quick Test
+- Start recording → Suggested Questions update live
+- Diagnosis + SOAP update during recording
+- Prescription appears after analysis
 
 ---
 
-## 5) Project Ports Summary
-
-- Frontend (React): http://localhost:3000
-- Backend (FastAPI): http://localhost:8000
-- Ollama (LLM): http://localhost:11434
-
----
-
-## 6) What We Added / Configured
-
-- Live suggested questions endpoint: `/suggest-questions-live`
-- Audio upload endpoint: `/analyze-audio`
-- Fixed `python-multipart` for file upload
-- Frontend now:
-  - Shows Suggested Questions from backend
-  - If `/analyze-audio` returns empty questions, it calls `/suggest-questions-live`
-- Ollama model used: `qwen2.5:3b`
-
----
-
-## 7) Normal Startup Order (Every Time)
-
-1. Start Ollama
-2. Start Backend (FastAPI)
-3. Start Frontend (React)
-4. Open browser at http://localhost:3000
-
----
-
-Good luck 🚀
+## 5) Ports
+- Ollama: 127.0.0.1:11434
+- Backend: 127.0.0.1:8000
+- Frontend: localhost:3000

@@ -1,151 +1,60 @@
-# yashfii --- AI Medical Assistant (Demo)
+# AI Doctor Friend (React + FastAPI + Ollama)
 
-A full-stack demo for an AI medical assistant built with: **React +
-FastAPI + Ollama + Whisper**.
+A demo medical assistant that:
+- Records speech in browser
+- Generates Live Suggested Questions (SSE streaming)
+- Generates Diagnosis + SOAP + Prescription using Ollama
 
-The project supports: - 🎙️ Live microphone speech-to-text - ⚡ Live
-suggested follow-up questions while the patient/doctor is speaking - 🎧
-Audio upload transcription using Whisper - 🧠 AI analysis (SOAP notes,
-differential diagnosis, treatment plan, etc.) - 💾 Save visit data as
-JSON
+Model:
+- qwen2.5:7b-instruct
 
-------------------------------------------------------------------------
+---
 
-## 🧩 Architecture
+## Features
+- Live Suggested Questions (SSE)
+- Live mid-analysis (Diagnosis + SOAP + Prescription)
+- Final analysis on stop
+- Upload audio endpoint placeholder
+- Save visit endpoint placeholder
 
--   **Frontend**: React (localhost:3000)
-    -   Live mic UI
-    -   Displays transcript, suggested questions, diagnoses, SOAP notes
--   **Backend**: FastAPI (localhost:8000)
-    -   `/analyze` → full AI analysis
-    -   `/analyze-audio` → Whisper transcription + analysis
-    -   `/suggest-questions-live` → fast live suggested questions
-    -   `/save-visit` → save visit JSON
--   **LLM**: Ollama (local)
-    -   Model used: `qwen2.5:3b`
--   **Speech-to-Text**: Whisper (via existing Python environment)
+---
 
-------------------------------------------------------------------------
+## Tech Stack
+- Frontend: React
+- Backend: FastAPI
+- LLM: Ollama
 
-## ✨ Features
+---
 
--   Live microphone transcription in the browser
--   Real-time suggested questions (updates while speaking)
--   Automatic language handling:
-    -   Arabic → questions in Arabic
-    -   English → questions in English
-    -   Mixed → Arabic with medical terms in English
--   Audio file upload for transcription and analysis
--   Full AI medical analysis (SOAP, diagnosis, plan, prescription)
--   Save visit results to JSON files
+## Main Endpoints
 
-------------------------------------------------------------------------
+### POST /suggest-questions-live-stream
+SSE stream:
+- ping
+- q -> { "q": "..." }
+- done
 
-## 📦 Requirements
+### POST /analyze
+Returns:
+- differential_diagnosis
+- soap_notes
+- prescription
 
--   **Node.js** (for frontend)
+---
 
--   **Python 3.10+** (for backend)
+## Run
+See **run.md** for full instructions.
 
--   **Ollama** installed locally\
-    Pull model:
+Quick start:
 
-    ``` bash
-    ollama pull qwen2.5:3b
-    ```
-
--   **Whisper** working in a Python environment
-
-------------------------------------------------------------------------
-
-## ▶️ Run Backend (FastAPI)
-
-``` bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-
-Open API docs:
-
-    http://localhost:8000/docs
-
-------------------------------------------------------------------------
-
-## ▶️ Run Frontend (React)
-
-``` bash
+```bash
+ollama pull qwen2.5:7b-instruct
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 npm install
 npm start
 ```
 
-Open in browser:
+---
 
-    http://localhost:3000
-
-------------------------------------------------------------------------
-
-## 🔌 Environment Notes
-
-The backend uses: - Ollama endpoint: `http://localhost:11434` - Model:
-`qwen2.5:3b` - Whisper Python path can be set using environment
-variable:
-
-**PowerShell (Windows):**
-
-``` powershell
-$env:WHISPER_PY="C:\path\to\your\python.exe"
-```
-
-**CMD (Windows):**
-
-``` cmd
-set WHISPER_PY=C:\path\to\your\python.exe
-```
-
-(If not set, the backend will raise an error asking for it.)
-
-------------------------------------------------------------------------
-
-## 🧪 Main Endpoints
-
--   `POST /analyze`\
-    Full analysis from text (SOAP, diagnosis, plan, etc.)
-
--   `POST /analyze-audio`\
-    Upload audio → Whisper transcription → full analysis
-
--   `POST /suggest-questions-live`\
-    Lightweight endpoint for **live suggested questions** while speaking
-
--   `POST /save-visit`\
-    Save visit data to JSON file
-
-------------------------------------------------------------------------
-
-## 🎓 Academic Use
-
-This project is a **demo / educational prototype** showing how to: -
-Integrate speech-to-text with a web UI - Use local LLMs (Ollama) in a
-medical-style assistant - Provide real-time AI assistance during a
-clinical-style conversation - Structure a full-stack AI application
-(React + FastAPI)
-
-------------------------------------------------------------------------
-
-## ⚠️ Disclaimer
-
-This is **not** a medical device and **not** for real clinical use.\
-It is a **research / educational demo** only.
-
-------------------------------------------------------------------------
-
-## 👤 Author
-
-**Adham Tamer**\
-AI Engineering Student\
-**Saif Mohamed**\
-AI Engineering Student\
-**Mohamed Korayem**\
-AI Engineering Student\
-Project: *yashfii --- AI Medical Assistant Demo*
+## Notes
+This is a demo project, not medical advice.
